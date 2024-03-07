@@ -1,0 +1,10 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: spread-static
+Upstream-Contact: Zygmunt Krynicki <zygmunt.krynicki@canonical.com>
+Source: https://github.com/snapcore/spread-static
+
+# Sample paragraph, commented out:
+#
+# Files: src/*
+# Copyright: $YEAR $NAME <$CONTACT>
+# License: ...
