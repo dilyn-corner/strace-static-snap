@@ -8,6 +8,7 @@ description: |
 build-base: core22
 base: bare
 confinement: strict
+license: LGPL-2.1-or-later
 
 apps:
   strace-static:
