@@ -1,0 +1,162 @@
+From 1dd95d0d1b293daef1efff463a89e2511f38ae33 Mon Sep 17 00:00:00 2001
+From: Zygmunt Krynicki <me@zygoon.pl>
+Date: Mon, 8 Apr 2024 06:41:13 +0000
+Subject: [PATCH 2/2] strace: add support for -u UID:GID that bypasses lookup
+
+When building strace statically linked using the "--username" switch,
+along with a user name, will lead to strange errors. The reason is that
+the calls to getpwnam() and initgroups() will fail because glibc will
+still try to dlopen() the libnss modules which then fails in unexpected
+ways.
+
+Extend the supported values to allow a classic UID:GID pair to be given
+as numeric values, so that statically linked strace no longer relies on
+dynamic name lookup.
+
+Originally-by: Michael Vogt <mvo@ubuntu.com>
+Signed-off-by: Zygmunt Krynicki <me@zygoon.pl>
+Co-authored-by: Dmitry V. Levin <ldv@strace.io>
+---
+ NEWS            |  7 ++++++
+ doc/strace.1.in |  7 ++++++
+ src/strace.c    | 64 ++++++++++++++++++++++++++++++++++++++++---------
+ 3 files changed, 67 insertions(+), 11 deletions(-)
+
+diff --git a/NEWS b/NEWS
+index a8eb8623c..91abdbbeb 100644
+--- a/NEWS
++++ b/NEWS
+@@ -1,3 +1,10 @@
++Noteworthy changes in release ?.? (????-??-??)
++==============================================
++
++* Improvements
++  * The --user|-u option has learned to recognize numeric UID:GID pair, allowing
++    e.g. statically-built strace to be used without invoking nss plugins.
++
+ Noteworthy changes in release 6.8 (2024-03-20)
+ ==============================================
+ 
+diff --git a/doc/strace.1.in b/doc/strace.1.in
+index a4ead79fc..162b46447 100644
+--- a/doc/strace.1.in
++++ b/doc/strace.1.in
+@@ -358,6 +358,13 @@ This option is only useful when running as root and enables the
+ correct execution of setuid and/or setgid binaries.
+ Unless this option is used setuid and setgid programs are executed
+ without effective privileges.
++.TQ
++.BI "\-u " UID:GID
++.TQ
++.BR "\-\-user" = \fIUID:GID\fR
++Alternative syntax where the program is started with exactly the given user
++and group IDs, and an empty list of supplementary groups.  In this case,
++user and group name lookups are not performed.
+ .TP
+ .BR "\-\-argv0" = \fIname\fR
+ Set argv[0] of the command being executed to
+diff --git a/src/strace.c b/src/strace.c
+index 649b8d160..785ee0712 100644
+--- a/src/strace.c
++++ b/src/strace.c
+@@ -310,6 +310,9 @@ Startup:\n\
+                  trace process with process id PID, may be repeated\n\
+   -u USERNAME, --user=USERNAME\n\
+                  run command as USERNAME handling setuid and/or setgid\n\
++                 USERNAME may be a user name or a UID:GID pair, where UID\n\
++                 and GID are numbers. In the latter case, strace does not\n\
++                 perform name lookups.\n\
+   --argv0=NAME   set PROG argv[0] to NAME\n\
+ \n\
+ Tracing:\n\
+@@ -1515,6 +1518,28 @@ startup_attach(void)
+ 	}
+ }
+ 
++static bool
++is_uid_gid_pair(const char *username, uid_t *uid_ptr, gid_t *gid_ptr)
++{
++	const char *colon = strchr(username, ':');
++	if (!colon)
++		return false;
++	if (uid_ptr) {
++		const unsigned long long max_uid =
++			zero_extend_signed_to_ull((uid_t) -1) - 1;
++		*uid_ptr = (uid_t) string_to_uint_ex(username, NULL,
++						     max_uid, ":");
++	}
++	if (gid_ptr) {
++		const unsigned long long max_gid =
++			zero_extend_signed_to_ull((gid_t) -1) - 1;
++		*gid_ptr = (gid_t) string_to_uint_ex(colon + 1, NULL,
++						     max_gid, ":");
++	}
++	return true;
++}
++
++
+ static void
+ maybe_init_seccomp_filter(void)
+ {
+@@ -1556,11 +1581,19 @@ exec_or_die(void)
+ 
+ 	if (username != NULL) {
+ 		/*
+-		 * It is important to set groups before we
+-		 * lose privileges on setuid.
++		 * It is important to set groups before we lose privileges on
++		 * setuid.  Unless UID:GID was passed, which is relevant e.g.
++		 * for statically linked builds, initgroups() is invoked.
++		 * Otherwise, to avoid leaking groups, setgroups() is invoked
++		 * to set an empty list of supplementary groups.
+ 		 */
+-		if (initgroups(username, run_gid) < 0)
+-			perror_msg_and_die("initgroups");
++		if (is_uid_gid_pair(username, NULL, NULL)) {
++			if (setgroups(0, NULL) < 0)
++				perror_msg_and_die("setgroups");
++		} else {
++			if (initgroups(username, run_gid) < 0)
++				perror_msg_and_die("initgroups");
++		}
+ 		if (setregid(run_gid, params->run_egid) < 0)
+ 			perror_msg_and_die("setregid");
+ 
+@@ -2965,18 +2998,27 @@ init(int argc, char *argv[])
+ 
+ 	/* See if they want to run as another user. */
+ 	if (username != NULL) {
+-		struct passwd *pent;
+-
+ 		if (getuid() != 0 || geteuid() != 0) {
+ 			error_msg_and_die("You must be root to use "
+ 					  "the -u/--username option");
+ 		}
+-		pent = getpwnam(username);
+-		if (pent == NULL) {
+-			error_msg_and_die("Cannot find user '%s'", username);
++
++		/*
++		 * If the username is in the form of UID:GID,
++		 * do not perform name lookups.
++		 */
++		if (is_uid_gid_pair(username, &run_uid, &run_gid)) {
++			if (run_uid == (uid_t) -1 || run_gid == (gid_t) -1)
++				error_msg_and_die("Invalid UID:GID pair '%s'",
++						  username);
++		} else {
++			struct passwd *pent = getpwnam(username);
++			if (pent == NULL)
++				error_msg_and_die("Cannot find user '%s'",
++						  username);
++			run_uid = pent->pw_uid;
++			run_gid = pent->pw_gid;
+ 		}
+-		run_uid = pent->pw_uid;
+-		run_gid = pent->pw_gid;
+ 	} else {
+ 		run_uid = getuid();
+ 		run_gid = getgid();
+-- 
+2.43.0
+
