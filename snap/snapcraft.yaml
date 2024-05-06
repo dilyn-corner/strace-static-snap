@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # SPDX-FileCopyrightText: Canonical Ltd.
 name: strace-static
-version: "6.7"
+version: "6.8"
 summary: diagnostic, debugging and instructional userspace utility
 description: |
   strace is a diagnostic, debugging and instructional userspace utility for Linux
@@ -17,7 +17,7 @@ apps:
 parts:
   strace:
     plugin: autotools
-    source: https://github.com/strace/strace/releases/download/v6.7/strace-6.7.tar.xz
+    source: https://github.com/strace/strace/releases/download/v6.8/strace-6.8.tar.xz
     build-packages:
       - gawk
       - on s390x:
@@ -30,7 +30,8 @@ parts:
         - libunwind-dev
     override-pull: |
       craftctl default
-      patch -p1 < ${CRAFT_PROJECT_DIR}/0001-strace-add-new-uid-gid-options-for-static-linking.patch
+      patch -p1 < ${CRAFT_PROJECT_DIR}/0001-tests-prepare-for-user-UID-GID-syntax.patch
+      patch -p1 < ${CRAFT_PROJECT_DIR}/0002-strace-add-support-for-u-UID-GID-that-bypasses-looku.patch
     autotools-configure-parameters:
       - --prefix=/
       - --enable-mpers=check
