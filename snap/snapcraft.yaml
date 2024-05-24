@@ -9,6 +9,8 @@ build-base: core22
 base: bare
 confinement: strict
 license: LGPL-2.1-or-later
+assumes:
+ - snapd2.64
 
 apps:
   strace-static:
